@@ -1,3 +1,4 @@
+import API_URL from '../../api';
 import React, { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Users, Calendar, Hash, Camera } from 'lucide-react';
@@ -31,7 +32,7 @@ export default function GroupProfileView({ channel, setActiveNav, isAdmin }) {
       const formData = new FormData();
       formData.append('file', file);
       
-      const uploadRes = await fetch('http://localhost:5000/api/upload', {
+      const uploadRes = await fetch(`${API_URL}/api/upload`, {
         method: 'POST',
         body: formData
       });
@@ -39,7 +40,7 @@ export default function GroupProfileView({ channel, setActiveNav, isAdmin }) {
       
       if (uploadData.success) {
         const token = sessionStorage.getItem('token');
-        const updateRes = await fetch(`http://localhost:5000/api/channels/${currentChannel._id || currentChannel.id}`, {
+        const updateRes = await fetch(``${API_URL}/api/channels/${currentChannel._id || currentChannel.id}`, {
           method: 'PUT',
           headers: { 
             'Content-Type': 'application/json',
