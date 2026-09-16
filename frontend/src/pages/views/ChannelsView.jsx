@@ -1,8 +1,9 @@
-import API_URL from '../../api';
+import API_URL, { getMediaUrl } from '../../api';
 import React, { useState, useEffect, useRef } from 'react';
 import { Hash, Search, Plus, Send, Smile, Paperclip, AtSign, Bold, Pin, Users, FileText, X, Upload, Trash2, UserMinus } from 'lucide-react';
 import { socket } from '../../socket';
 import AvatarStack from '../../components/profile/AvatarStack';
+import EmojiPicker from 'emoji-picker-react';
 
 const initialChannels = [
   { id: 1, name: 'general', desc: 'Company-wide updates', unread: 0 },
@@ -60,6 +61,10 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
   const [newChannelDesc, setNewChannelDesc] = useState('');
   const [newChannelAvatar, setNewChannelAvatar] = useState(null);
 
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [attachment, setAttachment] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+
   // Add User modal state
   const [allUsers, setAllUsers] = useState([]);
   const [userSearch, setUserSearch] = useState('');
@@ -88,7 +93,7 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
     if (!selectedUser || !activeChannel) return;
     setAddUserStatus('');
     try {
-      const res = await fetch(``${API_URL}/api/channels/${activeChannel}/members`, {
+      const res = await fetch(`${API_URL}/api/channels/${activeChannel}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: selectedUser._id })
@@ -113,7 +118,7 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
     if (!window.confirm('Remove this member from the channel?')) return;
     try {
       const token = sessionStorage.getItem('token');
-      const res = await fetch(``${API_URL}/api/groups/${activeChannel}/members/${memberId}`, {
+      const res = await fetch(`${API_URL}/api/groups/${activeChannel}/members/${memberId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -131,7 +136,7 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
     if (!window.confirm(`Delete channel "${ch?.name}"? This cannot be undone.`)) return;
     try {
       const token = sessionStorage.getItem('token');
-      const res = await fetch(``${API_URL}/api/channels/${activeChannel}`, {
+      const res = await fetch(`${API_URL}/api/channels/${activeChannel}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -180,6 +185,20 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           return [...prev, msg];
         });
       }
+      
+      // Update channel list with the latest message and unread count
+      setChannelList(prev => prev.map(c => {
+        if ((c._id || c.id) === msg.channelId) {
+          const isActive = activeChannelRef.current && activeChannelRef.current === msg.channelId;
+          const newUnread = isActive ? 0 : (c.unread || 0) + 1;
+          return {
+            ...c,
+            latestMessage: msg,
+            unread: newUnread
+          };
+        }
+        return c;
+      }));
     };
     
     socket.on('receive_channel_message', handleReceive);
@@ -204,7 +223,7 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
     if (!channelId) return;
     setLoadingMessages(true);
     try {
-      const res = await fetch(``${API_URL}/api/channels/${channelId}/messages`);
+      const res = await fetch(`${API_URL}/api/channels/${channelId}/messages`);
       const data = await res.json();
       if (data.success) {
         setChannelMessages(data.messages);
@@ -277,14 +296,39 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
   );
 
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !activeChannel) return;
+    if ((!messageInput.trim() && !attachment) || !activeChannel) return;
     const name = loggedInUser?.fullName || loggedInUser?.email?.split('@')[0] || 'You';
     const initials = name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
     const avatar = loggedInUser?.avatar || '';
     const senderId = loggedInUser?._id || null;
 
+    setIsUploading(true);
+
     try {
-      const res = await fetch(``${API_URL}/api/channels/${activeChannel}/messages`, {
+      let fileUrl = '';
+      let fileName = '';
+      let fileSize = 0;
+      let fileType = 'text';
+
+      if (attachment) {
+        const formData = new FormData();
+        formData.append('file', attachment);
+        const uploadRes = await fetch(`${API_URL}/api/upload`, {
+          method: 'POST',
+          body: formData
+        });
+        const uploadData = await uploadRes.json();
+        if (uploadData.success) {
+          fileUrl = uploadData.fileUrl;
+          fileName = attachment.name;
+          fileSize = attachment.size;
+          fileType = attachment.type.startsWith('image/') ? 'image' : 
+                     attachment.type.startsWith('video/') ? 'video' : 
+                     attachment.type.startsWith('audio/') ? 'audio' : 'file';
+        }
+      }
+
+      const res = await fetch(`${API_URL}/api/channels/${activeChannel}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -292,7 +336,11 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           author: name, 
           authorInitials: initials,
           authorAvatar: avatar,
-          senderId: senderId
+          senderId: senderId,
+          fileUrl,
+          fileName,
+          fileSize,
+          fileType
         })
       });
       const data = await res.json();
@@ -302,9 +350,13 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           return [...prev, data.message];
         });
         setMessageInput('');
+        setAttachment(null);
+        setShowEmojiPicker(false);
       }
     } catch (err) {
       console.error('Failed to send message:', err);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -329,7 +381,16 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           {filtered.map(c => (
             <button
               key={c._id || c.id}
-              onClick={() => setActiveChannel(c._id || c.id)}
+              onClick={() => {
+                setActiveChannel(c._id || c.id);
+                // Clear unread count for this channel
+                setChannelList(prev => prev.map(chItem => {
+                  if ((chItem._id || chItem.id) === (c._id || c.id)) {
+                    return { ...chItem, unread: 0 };
+                  }
+                  return chItem;
+                }));
+              }}
               className={`w-full text-left px-3 py-3 rounded-xl mb-0.5 transition-all ${
                 activeChannel === (c._id || c.id)
                   ? 'bg-brand-purple/10 border border-brand-purple/20'
@@ -337,9 +398,9 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
               }`}
             >
               <div className="flex items-center gap-2">
-                {c.avatar ? (
+                {getMediaUrl(c.avatar) ? (
                   <div className="w-6 h-6 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100 shadow-sm border border-gray-200/50">
-                    <img src={c.avatar} alt={c.name} className="w-full h-full object-cover" />
+                    <img src={getMediaUrl(c.avatar)} alt={c.name} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                   </div>
                 ) : (
                   <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-[10px] font-bold shadow-sm border ${
@@ -359,7 +420,9 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                   </span>
                 )}
               </div>
-              <p className="text-xs text-gray-400 mt-0.5 ml-5">{c.description || c.desc}</p>
+              <p className="text-xs text-gray-400 mt-0.5 ml-5 truncate max-w-[180px]">
+                {c.latestMessage ? `${c.latestMessage.author}: ${c.latestMessage.text}` : (c.description || c.desc)}
+              </p>
             </button>
           ))}
           {isAdmin && (
@@ -377,9 +440,9 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
       <div className="flex-1 flex flex-col min-w-0">
         {/* Channel Header */}
         <div className="bg-white border-b border-gray-100 px-5 py-3.5 flex items-center gap-3 flex-shrink-0">
-          {ch?.avatar ? (
+          {getMediaUrl(ch?.avatar) ? (
             <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0 bg-gray-100 shadow-sm border border-gray-200/50">
-              <img src={ch.avatar} alt={ch.name} className="w-full h-full object-cover" />
+              <img src={getMediaUrl(ch.avatar)} alt={ch.name} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             </div>
           ) : (
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center text-white font-bold shadow-sm flex-shrink-0 text-sm">
@@ -400,9 +463,6 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                 <Users size={15} />
               </button>
             )}
-            <button className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 transition-colors"><Search size={15} /></button>
-            <button className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 transition-colors"><Pin size={15} /></button>
-            <button className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 transition-colors"><FileText size={15} /></button>
             {isAdmin && (
               <button
                 onClick={handleDeleteChannel}
@@ -425,8 +485,8 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           {!loadingMessages && channelMessages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 text-brand-purple overflow-hidden shadow-md border border-gray-200/50">
-                {ch?.avatar ? (
-                  <img src={ch.avatar} alt={ch.name} className="w-full h-full object-cover" />
+                {getMediaUrl(ch?.avatar) ? (
+                  <img src={getMediaUrl(ch.avatar)} alt={ch.name} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center text-white font-bold text-2xl">
                     {ch?.name?.charAt(0).toUpperCase()}
@@ -468,8 +528,8 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                   <div className="w-8 flex-shrink-0 flex flex-col justify-end">
                     {isFirstInGroup && (
                       <div className={`w-8 h-8 rounded-full ${colors[colorIdx]} flex items-center justify-center text-white text-[10px] font-bold shadow-sm overflow-hidden border border-white/60`}>
-                        {authorAvatar ? (
-                          <img src={authorAvatar} alt={msg.author} className="w-full h-full object-cover" />
+                        {getMediaUrl(authorAvatar) ? (
+                          <img src={getMediaUrl(authorAvatar)} alt={msg.author} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                         ) : (
                           authorInitials
                         )}
@@ -489,6 +549,23 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                       ? 'bg-brand-purple text-white rounded-2xl rounded-tr-sm' 
                       : 'bg-white text-gray-800 border border-gray-100 rounded-2xl rounded-tl-sm'
                   }`}>
+                    {msg.fileUrl && (
+                      <div className="mb-2">
+                        {msg.fileType === 'image' ? (
+                          <img src={getMediaUrl(msg.fileUrl)} alt={msg.fileName} className="max-w-xs rounded-lg max-h-64 object-cover" />
+                        ) : msg.fileType === 'video' ? (
+                          <video src={getMediaUrl(msg.fileUrl)} controls className="max-w-xs rounded-lg max-h-64" />
+                        ) : (
+                          <a href={getMediaUrl(msg.fileUrl)} target="_blank" rel="noopener noreferrer" className={`flex items-center gap-2 p-2 rounded-lg border ${isMine ? 'bg-purple-600/50 border-purple-500' : 'bg-gray-50 border-gray-200'}`}>
+                            <FileText size={20} className={isMine ? 'text-white' : 'text-brand-purple'} />
+                            <div className="flex flex-col">
+                              <span className="text-sm font-semibold truncate max-w-[200px]">{msg.fileName}</span>
+                              <span className={`text-[10px] ${isMine ? 'text-purple-200' : 'text-gray-500'}`}>{(msg.fileSize / 1024).toFixed(1)} KB</span>
+                            </div>
+                          </a>
+                        )}
+                      </div>
+                    )}
                     {msg.text}
                     
                     {/* Timestamp inline inside bubble */}
@@ -505,11 +582,46 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
         </div>
 
         {/* Message Input Area */}
-        <div className="bg-[#F0F2F5] p-3 border-t border-gray-200/60">
+        <div className="bg-[#F0F2F5] p-3 border-t border-gray-200/60 relative">
+          
+          {showEmojiPicker && (
+            <div className="absolute bottom-[80px] left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-gray-100">
+              <EmojiPicker 
+                onEmojiClick={(emojiData) => setMessageInput(prev => prev + emojiData.emoji)} 
+                width={300}
+                height={400}
+                searchDisabled={true}
+                skinTonesDisabled={true}
+              />
+            </div>
+          )}
+
+          {attachment && (
+            <div className="absolute bottom-[70px] left-14 z-40 bg-white border border-gray-200 shadow-sm rounded-lg p-2 flex items-center gap-3">
+              <div className="bg-brand-purple/10 p-2 rounded">
+                <FileText size={16} className="text-brand-purple" />
+              </div>
+              <div className="flex flex-col max-w-[150px]">
+                <span className="text-xs font-semibold text-gray-700 truncate">{attachment.name}</span>
+                <span className="text-[10px] text-gray-400">{(attachment.size / 1024).toFixed(1)} KB</span>
+              </div>
+              <button 
+                onClick={() => setAttachment(null)}
+                className="text-gray-400 hover:text-red-500 hover:bg-red-50 p-1 rounded transition-colors ml-1"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
           {isAdmin || ch?.members?.some(m => (m._id || m) === loggedInUser?._id) ? (
             <div className="flex items-end gap-2 bg-white rounded-3xl pl-4 pr-1.5 py-1.5 shadow-sm border border-transparent transition-all focus-within:border-brand-purple/30 focus-within:shadow-md">
               
-              <button className="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-full hover:bg-gray-100 mb-0.5">
+              <button 
+                type="button"
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-full hover:bg-gray-100 mb-0.5"
+              >
                 <Smile size={22} strokeWidth={1.5} />
               </button>
               
@@ -522,20 +634,29 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                 className="flex-1 bg-transparent text-[15px] text-gray-800 outline-none placeholder-gray-400 min-h-[40px] py-2"
               />
               
-              <button className="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-full hover:bg-gray-100 mb-0.5 hidden sm:block">
+              <label className="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-full hover:bg-gray-100 mb-0.5 hidden sm:flex cursor-pointer">
                 <Paperclip size={20} strokeWidth={1.5} />
-              </button>
+                <input 
+                  type="file" 
+                  className="hidden" 
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      setAttachment(e.target.files[0]);
+                    }
+                  }}
+                />
+              </label>
               
               <button
                 onClick={handleSendMessage}
-                disabled={!messageInput.trim()}
+                disabled={isUploading || (!messageInput.trim() && !attachment)}
                 className={`w-10 h-10 rounded-full flex items-center justify-center text-white transition-all ml-1 flex-shrink-0 mb-0.5 ${
-                  messageInput.trim() 
+                  (messageInput.trim() || attachment) && !isUploading
                     ? 'bg-brand-purple hover:bg-purple-700 shadow-md hover:scale-105 active:scale-95' 
                     : 'bg-gray-200 cursor-not-allowed text-gray-400'
                 }`}
               >
-                <Send size={18} className={messageInput.trim() ? 'ml-0.5' : ''} />
+                <Send size={18} className={(messageInput.trim() || attachment) ? 'ml-0.5' : ''} />
               </button>
             </div>
           ) : (
@@ -551,9 +672,9 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
         <div className="p-4 border-b border-gray-100">
           <h3 className="text-sm font-bold text-gray-900 mb-1">Channel info</h3>
           <div className="flex items-center gap-2 text-gray-900 font-bold text-sm mt-2">
-            {ch?.avatar ? (
+            {getMediaUrl(ch?.avatar) ? (
               <div className="w-5 h-5 rounded overflow-hidden flex-shrink-0 bg-gray-100 shadow-sm border border-gray-200/50">
-                <img src={ch.avatar} alt={ch.name} className="w-full h-full object-cover" />
+                <img src={getMediaUrl(ch.avatar)} alt={ch.name} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
               </div>
             ) : (
               <div className="w-5 h-5 rounded bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center text-white font-bold flex-shrink-0 text-[9px]">
@@ -574,7 +695,7 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
           className="p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors flex items-center gap-3 group"
         >
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-400 to-emerald-500 flex items-center justify-center text-white font-bold shadow-sm group-hover:scale-105 transition-transform overflow-hidden">
-            {ch?.avatar ? <img src={ch.avatar} alt="Avatar" className="w-full h-full object-cover" /> : ch?.name?.charAt(0).toUpperCase()}
+            {getMediaUrl(ch?.avatar) ? <img src={getMediaUrl(ch.avatar)} alt="Avatar" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : ch?.name?.charAt(0).toUpperCase()}
           </div>
           <div>
             <h4 className="text-sm font-bold text-gray-900 group-hover:text-brand-purple transition-colors">Group Profile</h4>
@@ -751,8 +872,12 @@ export default function ChannelsView({ isAdmin, loggedInUser, setActiveNav, setS
                           : 'hover:bg-gray-50'
                       }`}
                     >
-                      <div className="w-8 h-8 rounded-full bg-brand-purple/20 flex items-center justify-center text-brand-purple text-xs font-bold flex-shrink-0">
-                        {(u.fullName || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                      <div className="w-8 h-8 rounded-full bg-brand-purple/20 flex items-center justify-center text-brand-purple text-xs font-bold flex-shrink-0 overflow-hidden">
+                        {getMediaUrl(u.avatar) ? (
+                          <img src={getMediaUrl(u.avatar)} alt={u.fullName} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                        ) : (
+                          (u.fullName || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-gray-800 truncate">{u.fullName}</p>

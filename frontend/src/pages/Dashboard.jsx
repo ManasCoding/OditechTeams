@@ -1,4 +1,4 @@
-import API_URL from '../api';
+import API_URL, { getMediaUrl } from '../api';
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -25,6 +25,7 @@ import ProfileView from './views/ProfileView';
 import EditProfileView from './views/EditProfileView';
 import MemberProfileView from './views/MemberProfileView';
 import GroupProfileView from './views/GroupProfileView';
+import SystemSettingsView from './views/SystemSettingsView';
 
 const teamActivityData = [
   { day: 'Mon', Messages: 40, Meetings: 10 },
@@ -72,8 +73,6 @@ const getNavItems = (isAdmin) => [
       { label: 'Members', icon: Users },
       { label: 'Departments', icon: Building2 },
       { label: 'Files', icon: Folder },
-      { label: 'Tasks', icon: CheckSquare },
-      { label: 'Apps', icon: Grid },
     ]
   },
   ...(isAdmin ? [{
@@ -82,7 +81,7 @@ const getNavItems = (isAdmin) => [
       { label: 'User Management', icon: User },
       { label: 'Role Management', icon: ShieldCheck },
       { label: 'System Monitoring', icon: Activity },
-      { label: 'Settings', icon: Settings },
+      { label: 'System Settings', icon: Settings },
     ]
   }] : [
     {
@@ -306,8 +305,8 @@ export default function Dashboard() {
             className="flex items-center gap-2 px-2 py-2 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors"
           >
             <div className="w-8 h-8 rounded-full bg-brand-purple flex items-center justify-center text-white text-xs font-bold flex-shrink-0 overflow-hidden">
-              {loggedInUser.avatar
-                ? <img src={loggedInUser.avatar} alt={displayName} className="w-full h-full object-cover" />
+              {getMediaUrl(loggedInUser.avatar)
+                ? <img src={getMediaUrl(loggedInUser.avatar)} alt={displayName} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                 : initials
               }
             </div>
@@ -341,6 +340,7 @@ export default function Dashboard() {
                activeNav === 'Role Management' ? 'Define roles and assign permissions to users' :
                activeNav === 'Tasks' ? 'Track and manage your team\'s tasks across projects' :
                activeNav === 'Settings' ? 'Configure your workspace settings' :
+               activeNav === 'System Settings' ? 'Manage all system configurations and preferences' :
                activeNav}
             </p>
           </div>
@@ -369,8 +369,8 @@ export default function Dashboard() {
             className="flex items-center gap-2 cursor-pointer group"
           >
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-brand-purple to-blue-500 flex items-center justify-center text-white text-xs font-bold overflow-hidden shadow-sm">
-              {loggedInUser.avatar ? (
-                <img src={loggedInUser.avatar} alt="Avatar" className="w-full h-full object-cover" />
+              {getMediaUrl(loggedInUser.avatar) ? (
+                <img src={getMediaUrl(loggedInUser.avatar)} alt="Avatar" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
               ) : (
                 initials
               )}
@@ -401,9 +401,9 @@ export default function Dashboard() {
           {activeNav === 'Chat' && <ChatView />}
           {activeNav === 'Meetings' && <MeetingsView isAdmin={isAdmin} />}
           {activeNav === 'Calls' && <CallsView />}
-          {activeNav === 'Members' && <MembersView />}
-          {activeNav === 'Files' && <FilesView />}
-          {activeNav === 'Calendar' && <CalendarView />}
+          {activeNav === 'Members' && <MembersView setActiveNav={setActiveNav} setSelectedMemberId={setSelectedMemberId} />}
+          {activeNav === 'Files' && <FilesView loggedInUser={loggedInUser} isAdmin={isAdmin} />}
+          {activeNav === 'Calendar' && <CalendarView loggedInUser={loggedInUser} isAdmin={isAdmin} />}
           {activeNav === 'User Management' && <UserManagementView isAdmin={isAdmin} />}
           {activeNav === 'System Monitoring' && <SystemMonitoringView />}
           {activeNav === 'Role Management' && <RoleManagementView />}
@@ -412,7 +412,8 @@ export default function Dashboard() {
           {activeNav === 'EditProfile' && <EditProfileView loggedInUser={loggedInUser} setActiveNav={setActiveNav} />}
           {activeNav === 'MemberProfile' && <MemberProfileView memberId={selectedMemberId} groupId={selectedGroupId} setActiveNav={setActiveNav} isAdmin={isAdmin} />}
           {activeNav === 'GroupProfile' && <GroupProfileView channel={selectedChannel} setActiveNav={setActiveNav} isAdmin={isAdmin} />}
-          {!['Channels','Chat','Meetings','Calls','Members','Files','Calendar','User Management','System Monitoring','Role Management','Tasks','Profile','EditProfile','MemberProfile','GroupProfile'].includes(activeNav) && (
+          {activeNav === 'System Settings' && <SystemSettingsView />}
+          {!['Channels','Chat','Meetings','Calls','Members','Files','Calendar','User Management','System Monitoring','Role Management','Tasks','Profile','EditProfile','MemberProfile','GroupProfile','System Settings'].includes(activeNav) && (
           <div className="flex-1 overflow-y-auto p-6">
 
           {/* Stat Cards */}
@@ -459,8 +460,8 @@ export default function Dashboard() {
                 {recentActivity.map((item) => (
                   <div key={item.id} className="flex items-center gap-3">
                     <div className={`w-9 h-9 rounded-full ${item.color} flex items-center justify-center text-white text-xs font-bold flex-shrink-0 overflow-hidden`}>
-                      {item.avatar
-                        ? <img src={item.avatar} alt={item.name} className="w-full h-full object-cover" />
+                      {getMediaUrl(item.avatar)
+                        ? <img src={getMediaUrl(item.avatar)} alt={item.name} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                         : item.initials
                       }
                     </div>
